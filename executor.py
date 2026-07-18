@@ -40,12 +40,17 @@ def _tasks() -> dict:
         neural_match_points,
         neural_similarity,
     )
+    from audiotwin.scores import _neural_scores
 
     return {
         "neural_similarity": {"fn": neural_similarity, "files": 2},
         "neural_match_points": {"fn": neural_match_points, "files": 2},
         "neural_localized_match": {"fn": neural_localized_match, "files": 2},
         "neural_embedding": {"fn": neural_embedding, "files": 1},
+        # Miroir exact de audiotwin.scores._neural_scores (mêmes clés :
+        # neural_similarity, neural_similarity_raw) — c'est ce que
+        # mkzik-mir-poc consomme via pipeline.extract_features().
+        "neural_scores": {"fn": _neural_scores, "files": 2},
     }
 
 

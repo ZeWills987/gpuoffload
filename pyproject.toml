@@ -1,0 +1,14 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gpuoffload"
+version = "0.1.0"
+description = "Executeur GPU a la demande (pod loue) orchestre par un serveur de base."
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+include = ["orchestrator.py", "executor.py"]
