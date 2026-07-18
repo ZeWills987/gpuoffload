@@ -99,11 +99,21 @@ class RunPodProvider:
 
     name = "runpod"
 
+    #: Types de GPU essayes dans l'ordre quand RunPod repond "This machine
+    #: does not have the resources" (disponibilite fluctuante). Tous ont
+    #: largement assez de VRAM pour Sample-ID (inference seule) ; l'ordre
+    #: privilegie le moins cher a l'heure.
+    GPU_FALLBACKS = [
+        "NVIDIA RTX A4000",
+        "NVIDIA GeForce RTX 3090",
+        "NVIDIA GeForce RTX 4090",
+    ]
+
     def __init__(
         self,
         api_key: str | None = None,
         executor_url: str | None = None,
-        gpu_type: str = "NVIDIA GeForce RTX 4090",
+        gpu_type: str | list[str] | None = None,
         image: str = PREBUILT_IMAGE,
         disk_gb: int = 20,
         pod_name: str = "gpuoffload-executor",
@@ -119,7 +129,12 @@ class RunPodProvider:
                 "hébergez executor.py à une URL brute (repo git, gist...), ou "
                 "utilisez l'image prebuilt par defaut (aucune URL requise)"
             )
-        self._gpu_type = gpu_type
+        if gpu_type is None:
+            self._gpu_types = list(self.GPU_FALLBACKS)
+        elif isinstance(gpu_type, str):
+            self._gpu_types = [gpu_type]
+        else:
+            self._gpu_types = list(gpu_type)
         self._image = image
         self._disk_gb = disk_gb
         self._pod_name = pod_name
@@ -146,7 +161,6 @@ class RunPodProvider:
         payload = {
             "name": self._pod_name,
             "imageName": self._image,
-            "gpuTypeIds": [self._gpu_type],
             "gpuCount": 1,
             "containerDiskInGb": self._disk_gb,
             "ports": ["8000/http"],
@@ -172,12 +186,26 @@ class RunPodProvider:
             )
             payload["dockerStartCmd"] = ["bash", "-c", start_cmd]
 
-        pod = self._api("POST", "/pods", payload)
-        self._pod_id = pod.get("id") or pod.get("podId")
-        if not self._pod_id:
-            raise RuntimeError(f"création du pod échouée : {pod}")
-        print(f"[orchestrator] pod RunPod créé : {self._pod_id}")
-        return f"https://{self._pod_id}-8000.proxy.runpod.net"
+        # La disponibilite RunPod fluctue ("This machine does not have the
+        # resources...") : on essaie chaque type de GPU dans l'ordre.
+        last_error: Exception | None = None
+        for gpu_type in self._gpu_types:
+            payload["gpuTypeIds"] = [gpu_type]
+            try:
+                pod = self._api("POST", "/pods", payload)
+            except RuntimeError as exc:
+                print(f"[orchestrator] {gpu_type} indisponible : {exc}")
+                last_error = exc
+                continue
+            self._pod_id = pod.get("id") or pod.get("podId")
+            if not self._pod_id:
+                raise RuntimeError(f"création du pod échouée : {pod}")
+            print(f"[orchestrator] pod RunPod créé : {self._pod_id} ({gpu_type})")
+            return f"https://{self._pod_id}-8000.proxy.runpod.net"
+        raise RuntimeError(
+            f"aucun GPU disponible parmi {self._gpu_types} — réessayez dans "
+            f"quelques minutes (dernière erreur : {last_error})"
+        )
 
     def terminate(self) -> None:
         if self._pod_id:
