@@ -28,17 +28,31 @@ protocole, même code que le vrai pod.
 
 ## Mode RunPod (GPU loué à la demande)
 
-Prérequis (une fois) :
-
-1. Compte sur runpod.com + crédit, puis une clé API (Settings → API Keys).
-2. Hébergez `executor.py` à une URL brute accessible (repo GitHub,
-   gist) — le pod le télécharge au boot.
+Prérequis (une fois) : compte sur runpod.com + crédit, puis une clé API
+(Settings → API Keys).
 
 ```bash
 export RUNPOD_API_KEY="..."
-export GPUOFFLOAD_EXECUTOR_URL="https://raw.githubusercontent.com/<vous>/gpuoffload/main/executor.py"
 
 python orchestrator.py run neural_similarity a.mp3 b.mp3 --provider runpod
+```
+
+Par défaut, le provider `runpod` lance l'**image pré-construite**
+`ghcr.io/<owner>/gpuoffload-executor:latest` (voir `Dockerfile` +
+`.github/workflows/publish-executor-image.yml`, rebuild automatique à
+chaque push sur `master`) — audiotwin, sampleid et le checkpoint sont
+déjà installés dedans, le pod n'a plus qu'à démarrer `executor.py` :
+boot en quelques secondes au lieu de 3-6 min.
+
+Mode legacy (install au boot, plus lent, utile si l'image n'est pas
+encore publiée) : passez une image "brute" et l'URL de `executor.py` —
+
+```bash
+export GPUOFFLOAD_EXECUTOR_URL="https://raw.githubusercontent.com/<vous>/gpuoffload/master/executor.py"
+python -c "
+from orchestrator import GPUOffload
+off = GPUOffload(provider='runpod', image='runpod/pytorch:1.0.7-cu1281-torch280-ubuntu2404')
+"
 ```
 
 Ou en bibliothèque, depuis votre code serveur :
@@ -59,10 +73,12 @@ quels aux fonctions audiotwin).
 
 ## Coûts et sécurité
 
-- **Premier boot du pod : ~3-6 min** (apt + pip + checkpoint 805 Mo).
-  Pour l'abaisser à ~30 s : construisez une image Docker avec la stack
-  et le checkpoint préinstallés, et passez `image=` au provider. Les
-  jobs suivants sur un pod chaud : ~1-3 s par paire.
+- **Premier boot du pod (image prébuilt) : quelques secondes.** Avec
+  l'image legacy (install au boot) : ~3-6 min (apt + pip + checkpoint
+  805 Mo) — l'essentiel de ce temps reste facturé par RunPod même s'il
+  ne calcule rien (téléchargement de la grosse image PyTorch/CUDA de
+  base par leur infra). Jobs suivants sur un pod déjà chaud : ~1-3 s
+  par paire.
 - **Idle timeout** (600 s par défaut) : le filet anti-facturation. En
   cas d'échec du DELETE, un avertissement explicite vous renvoie vers
   la console RunPod.

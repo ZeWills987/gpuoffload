@@ -78,13 +78,23 @@ class LocalProvider:
             self._proc = None
 
 
+#: Image pre-construite (audiotwin + sampleid + checkpoint deja installes) —
+#: voir Dockerfile + .github/workflows/publish-executor-image.yml. Boot en
+#: quelques secondes au lieu de plusieurs minutes (plus de git clone / pip
+#: install / download du checkpoint à chaque lancement de pod).
+PREBUILT_IMAGE = "ghcr.io/zewills987/gpuoffload-executor:latest"
+
+
 class RunPodProvider:
     """Ephemeral RunPod GPU pod via their REST API.
 
-    The pod boots a PyTorch image, installs the audiotwin stack, fetches
-    executor.py from ``executor_url`` and serves it on port 8000 (exposed
-    through RunPod's HTTPS proxy). Adjust gpu_type/image to taste — see
-    https://docs.runpod.io/ for current values.
+    Par defaut, lance PREBUILT_IMAGE (deja pretes : ffmpeg, audiotwin,
+    sampleid, checkpoint) — le pod n'a plus qu'a demarrer executor.py,
+    aucune installation au boot.
+
+    Passez ``image=`` a une image "brute" (ex. runpod/pytorch:...) pour
+    revenir au mode legacy install-au-boot (plus lent, utile si l'image
+    prebuilt n'est pas encore publiee ou pour deboguer une regression).
     """
 
     name = "runpod"
@@ -94,19 +104,20 @@ class RunPodProvider:
         api_key: str | None = None,
         executor_url: str | None = None,
         gpu_type: str = "NVIDIA GeForce RTX 4090",
-        # ubuntu2404 => Python 3.12, requis par sampleid (>=3.12).
-        image: str = "runpod/pytorch:1.0.7-cu1281-torch280-ubuntu2404",
+        image: str = PREBUILT_IMAGE,
         disk_gb: int = 20,
         pod_name: str = "gpuoffload-executor",
     ):
         self._api_key = api_key or os.environ.get("RUNPOD_API_KEY", "")
         if not self._api_key:
             raise SystemExit("RUNPOD_API_KEY manquant (env var ou api_key=)")
+        self._prebuilt = image == PREBUILT_IMAGE
         self._executor_url = executor_url or os.environ.get("GPUOFFLOAD_EXECUTOR_URL", "")
-        if not self._executor_url:
+        if not self._prebuilt and not self._executor_url:
             raise SystemExit(
                 "URL du script executor manquante (GPUOFFLOAD_EXECUTOR_URL) — "
-                "hébergez executor.py à une URL brute (repo git, gist...)"
+                "hébergez executor.py à une URL brute (repo git, gist...), ou "
+                "utilisez l'image prebuilt par defaut (aucune URL requise)"
             )
         self._gpu_type = gpu_type
         self._image = image
@@ -132,33 +143,36 @@ class RunPodProvider:
             raise RuntimeError(f"RunPod API {exc.code} sur {method} {path} : {body}") from exc
 
     def launch(self, token: str) -> str:
-        start_cmd = (
-            "bash -lc '"
-            "apt-get update -qq && apt-get install -y -qq ffmpeg curl git && "
-            'pip install -q "audiotwin[all] @ git+https://github.com/ZeWills987/audiotwin.git" && '
-            'pip install -q -e "git+https://github.com/sony/sampleid.git#egg=sampleid" && '
-            f"curl -fsSL {self._executor_url} -o /executor.py && "
-            "python /executor.py --port 8000'"
-        )
-        pod = self._api(
-            "POST",
-            "/pods",
-            {
-                "name": self._pod_name,
-                "imageName": self._image,
-                "gpuTypeIds": [self._gpu_type],
-                "gpuCount": 1,
-                "containerDiskInGb": self._disk_gb,
-                "ports": ["8000/http"],
-                "env": {
-                    "GPUOFFLOAD_TOKEN": token,
-                    "AUDIOTWIN_DEVICE": "cuda",
-                    # Ubuntu 24.04 : pip systeme protege par PEP 668.
-                    "PIP_BREAK_SYSTEM_PACKAGES": "1",
-                },
-                "dockerStartCmd": ["bash", "-c", start_cmd],
+        payload = {
+            "name": self._pod_name,
+            "imageName": self._image,
+            "gpuTypeIds": [self._gpu_type],
+            "gpuCount": 1,
+            "containerDiskInGb": self._disk_gb,
+            "ports": ["8000/http"],
+            "env": {
+                "GPUOFFLOAD_TOKEN": token,
+                "AUDIOTWIN_DEVICE": "cuda",
+                # Ubuntu 24.04 : pip systeme protege par PEP 668.
+                "PIP_BREAK_SYSTEM_PACKAGES": "1",
             },
-        )
+        }
+        if self._prebuilt:
+            # Tout est deja installe dans l'image — on laisse son
+            # ENTRYPOINT (python /executor.py --port 8000) demarrer seul.
+            pass
+        else:
+            start_cmd = (
+                "bash -lc '"
+                "apt-get update -qq && apt-get install -y -qq ffmpeg curl git && "
+                'pip install -q "audiotwin[all] @ git+https://github.com/ZeWills987/audiotwin.git" && '
+                'pip install -q -e "git+https://github.com/sony/sampleid.git#egg=sampleid" && '
+                f"curl -fsSL {self._executor_url} -o /executor.py && "
+                "python /executor.py --port 8000'"
+            )
+            payload["dockerStartCmd"] = ["bash", "-c", start_cmd]
+
+        pod = self._api("POST", "/pods", payload)
         self._pod_id = pod.get("id") or pod.get("podId")
         if not self._pod_id:
             raise RuntimeError(f"création du pod échouée : {pod}")
