@@ -239,7 +239,9 @@ class GPUOffload:
         self._provider = PROVIDERS[provider](**provider_kwargs)
         self._idle_timeout = idle_timeout
         self._job_timeout = job_timeout
-        self._token = secrets.token_urlsafe(32)
+        # GPUOFFLOAD_TOKEN fixe (pratique pour deboguer le pod a la main
+        # avec curl) ; sinon un token aleatoire par lancement, plus sur.
+        self._token = os.environ.get("GPUOFFLOAD_TOKEN") or secrets.token_urlsafe(32)
         self._base_url: str | None = None
         self._last_job = 0.0
         self._lock = threading.Lock()
