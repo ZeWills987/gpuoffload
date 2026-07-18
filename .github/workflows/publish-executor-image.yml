@@ -24,10 +24,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Lowercase image owner
+        # Docker exige des tags en minuscules ; github.repository_owner
+        # garde la casse GitHub ("ZeWills987").
+        id: owner
+        run: echo "lower=${OWNER,,}" >> "$GITHUB_OUTPUT"
+        env:
+          OWNER: ${{ github.repository_owner }}
+
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/gpuoffload-executor:latest
-            ghcr.io/${{ github.repository_owner }}/gpuoffload-executor:${{ github.sha }}
+            ghcr.io/${{ steps.owner.outputs.lower }}/gpuoffload-executor:latest
+            ghcr.io/${{ steps.owner.outputs.lower }}/gpuoffload-executor:${{ github.sha }}
