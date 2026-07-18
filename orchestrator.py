@@ -123,8 +123,12 @@ class RunPodProvider:
             },
             data=json.dumps(payload).encode() if payload is not None else None,
         )
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            return json.loads(resp.read() or "{}")
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return json.loads(resp.read() or "{}")
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode(errors="replace")
+            raise RuntimeError(f"RunPod API {exc.code} sur {method} {path} : {body}") from exc
 
     def launch(self, token: str) -> str:
         start_cmd = (
