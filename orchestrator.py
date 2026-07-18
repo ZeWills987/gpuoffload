@@ -259,16 +259,40 @@ class GPUOffload:
     def _wait_healthy(self) -> None:
         deadline = time.time() + BOOT_TIMEOUT
         delay = 2.0
+        last_report = 0.0
+        last_error = "?"
         while time.time() < deadline:
             try:
                 health = self._request("GET", "/health", timeout=10)
                 print(f"[orchestrator] executor prêt : {health}")
                 return
-            except (urllib.error.URLError, OSError, TimeoutError):
-                time.sleep(delay)
-                delay = min(delay * 1.5, 20.0)
+            except urllib.error.HTTPError as exc:
+                # 401 = token divergent, 403 = probablement bloque par le
+                # proxy — des erreurs de CONFIG, pas de boot : reessayer
+                # en boucle ne les resoudra jamais.
+                body = exc.read().decode(errors="replace")[:200]
+                if exc.code in (401, 403):
+                    self.shutdown()
+                    raise RuntimeError(
+                        f"l'executor repond mais refuse la requete "
+                        f"(HTTP {exc.code} : {body}) — verifiez le token / le proxy"
+                    ) from exc
+                last_error = f"HTTP {exc.code} : {body}"
+            except (urllib.error.URLError, OSError, TimeoutError) as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+            # Un point d'avancement toutes les ~30 s, sinon silence radio.
+            if time.time() - last_report > 30:
+                remaining = deadline - time.time()
+                print(f"[orchestrator] en attente de l'executor "
+                      f"({remaining:.0f}s restantes) — dernier essai : {last_error}")
+                last_report = time.time()
+            time.sleep(delay)
+            delay = min(delay * 1.5, 20.0)
         self.shutdown()
-        raise RuntimeError(f"l'exécuteur n'a pas démarré en {BOOT_TIMEOUT:.0f}s")
+        raise RuntimeError(
+            f"l'exécuteur n'a pas démarré en {BOOT_TIMEOUT:.0f}s "
+            f"(dernière erreur : {last_error})"
+        )
 
     def _touch(self) -> None:
         self._last_job = time.time()
@@ -301,6 +325,9 @@ class GPUOffload:
             headers={
                 "Authorization": f"Bearer {self._token}",
                 "Content-Type": "application/json",
+                # Le proxy RunPod est derriere Cloudflare, qui peut filtrer
+                # le User-Agent par defaut de urllib (Python-urllib/3.x).
+                "User-Agent": "gpuoffload/1.0",
             },
             data=json.dumps(payload).encode() if payload is not None else None,
         )
