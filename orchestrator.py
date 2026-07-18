@@ -94,7 +94,8 @@ class RunPodProvider:
         api_key: str | None = None,
         executor_url: str | None = None,
         gpu_type: str = "NVIDIA GeForce RTX 4090",
-        image: str = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04",
+        # ubuntu2404 => Python 3.12, requis par sampleid (>=3.12).
+        image: str = "runpod/pytorch:1.0.7-cu1281-torch280-ubuntu2404",
         disk_gb: int = 20,
         pod_name: str = "gpuoffload-executor",
     ):
@@ -133,7 +134,7 @@ class RunPodProvider:
     def launch(self, token: str) -> str:
         start_cmd = (
             "bash -lc '"
-            "apt-get update -qq && apt-get install -y -qq ffmpeg curl && "
+            "apt-get update -qq && apt-get install -y -qq ffmpeg curl git && "
             'pip install -q "audiotwin[all] @ git+https://github.com/ZeWills987/audiotwin.git" && '
             'pip install -q -e "git+https://github.com/sony/sampleid.git#egg=sampleid" && '
             f"curl -fsSL {self._executor_url} -o /executor.py && "
@@ -149,7 +150,12 @@ class RunPodProvider:
                 "gpuCount": 1,
                 "containerDiskInGb": self._disk_gb,
                 "ports": ["8000/http"],
-                "env": {"GPUOFFLOAD_TOKEN": token, "AUDIOTWIN_DEVICE": "cuda"},
+                "env": {
+                    "GPUOFFLOAD_TOKEN": token,
+                    "AUDIOTWIN_DEVICE": "cuda",
+                    # Ubuntu 24.04 : pip systeme protege par PEP 668.
+                    "PIP_BREAK_SYSTEM_PACKAGES": "1",
+                },
                 "dockerStartCmd": ["bash", "-c", start_cmd],
             },
         )
