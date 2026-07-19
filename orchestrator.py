@@ -157,7 +157,38 @@ class RunPodProvider:
             body = exc.read().decode(errors="replace")
             raise RuntimeError(f"RunPod API {exc.code} sur {method} {path} : {body}") from exc
 
+    def _adopt_existing(self) -> str | None:
+        """Réutilise un pod gpuoffload déjà en vie (relance, orphelin...).
+
+        Ne marche que si GPUOFFLOAD_TOKEN est fixe (env) : un pod adopté
+        vérifie le token qu'il a reçu à SA création. Si le token ne
+        correspond pas, le healthcheck échouera en 401 et le pod sera
+        détruit puis recréé proprement.
+        """
+        try:
+            response = self._api("GET", "/pods")
+        except RuntimeError as exc:
+            print(f"[orchestrator] liste des pods indisponible : {exc}")
+            return None
+        pods = response.get("pods", response) if isinstance(response, dict) else response
+        if not isinstance(pods, list):
+            return None
+        for pod in pods:
+            name = pod.get("name", "")
+            status = (pod.get("desiredStatus") or pod.get("status") or "").upper()
+            if name == self._pod_name and status not in ("TERMINATED", "EXITED", "DEAD"):
+                self._pod_id = pod.get("id") or pod.get("podId")
+                if self._pod_id:
+                    print(f"[orchestrator] pod existant réutilisé : {self._pod_id} "
+                          f"({status or 'statut inconnu'}) — pas de nouveau pod")
+                    return f"https://{self._pod_id}-8000.proxy.runpod.net"
+        return None
+
     def launch(self, token: str) -> str:
+        adopted = self._adopt_existing()
+        if adopted:
+            return adopted
+
         payload = {
             "name": self._pod_name,
             "imageName": self._image,
